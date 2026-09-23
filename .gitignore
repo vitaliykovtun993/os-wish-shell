@@ -1,0 +1,6 @@
+# build output
+processes-shell/wish
+*.o
+
+# produced by tester/run-tests.sh
+processes-shell/tests-out/

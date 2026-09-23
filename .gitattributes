@@ -1,0 +1,2 @@
+# Tests compare output byte-for-byte and scripts need Unix line endings.
+* text=auto eol=lf
