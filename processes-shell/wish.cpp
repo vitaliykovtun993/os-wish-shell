@@ -5,7 +5,9 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <vector>
 
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace {
@@ -17,9 +19,61 @@ void print_error() {
     (void)written;
 }
 
-// Handles one line of input. Parsing and execution come in the next stages.
+// Splits a line into words separated by any amount of spaces and tabs.
+std::vector<std::string> tokenize(const std::string &line) {
+    std::vector<std::string> tokens;
+    const char *whitespace = " \t";
+    size_t start = line.find_first_not_of(whitespace);
+    while (start != std::string::npos) {
+        size_t end = line.find_first_of(whitespace, start);
+        tokens.push_back(line.substr(start, end - start));
+        start = line.find_first_not_of(whitespace, end);
+    }
+    return tokens;
+}
+
+// Runs an external program in a child process and waits for it to finish.
+// For now programs are looked up only in /bin.
+void run_program(const std::vector<std::string> &args) {
+    std::string program = "/bin/" + args[0];
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        print_error();
+        return;
+    }
+
+    if (pid == 0) {
+        // execv() needs a NULL-terminated array of C strings.
+        std::vector<char *> argv;
+        for (const std::string &arg : args) {
+            argv.push_back(const_cast<char *>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+
+        execv(program.c_str(), argv.data());
+        // execv() returns only on failure.
+        print_error();
+        _exit(1);
+    }
+
+    if (waitpid(pid, nullptr, 0) < 0) {
+        print_error();
+    }
+}
+
+// Handles one line of input.
 void process_line(const std::string &line) {
-    (void)line;
+    std::vector<std::string> args = tokenize(line);
+    if (args.empty()) {
+        return;
+    }
+
+    if (args[0] == "exit") {
+        exit(0);
+    }
+
+    run_program(args);
 }
 
 }  // namespace
