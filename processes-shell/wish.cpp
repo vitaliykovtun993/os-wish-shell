@@ -12,6 +12,9 @@
 
 namespace {
 
+// Directories searched for executables, in order. Changed by `path`.
+std::vector<std::string> search_path = {"/bin"};
+
 // The one and only error message required by the specification.
 void print_error() {
     const char error_message[] = "An error has occurred\n";
@@ -32,10 +35,60 @@ std::vector<std::string> tokenize(const std::string &line) {
     return tokens;
 }
 
+// Finds an executable in the search path. Returns an empty string if the
+// program is not found in any directory.
+std::string find_program(const std::string &name) {
+    for (const std::string &dir : search_path) {
+        std::string candidate = dir + "/" + name;
+        if (access(candidate.c_str(), X_OK) == 0) {
+            return candidate;
+        }
+    }
+    return "";
+}
+
+// exit: takes no arguments.
+void builtin_exit(const std::vector<std::string> &args) {
+    if (args.size() != 1) {
+        print_error();
+        return;
+    }
+    exit(0);
+}
+
+// cd: takes exactly one argument.
+void builtin_cd(const std::vector<std::string> &args) {
+    if (args.size() != 2 || chdir(args[1].c_str()) != 0) {
+        print_error();
+    }
+}
+
+// path: replaces the search path with the given directories (possibly none).
+void builtin_path(const std::vector<std::string> &args) {
+    search_path.assign(args.begin() + 1, args.end());
+}
+
+// Runs a built-in command. Returns false if the command is not a built-in.
+bool run_builtin(const std::vector<std::string> &args) {
+    if (args[0] == "exit") {
+        builtin_exit(args);
+    } else if (args[0] == "cd") {
+        builtin_cd(args);
+    } else if (args[0] == "path") {
+        builtin_path(args);
+    } else {
+        return false;
+    }
+    return true;
+}
+
 // Runs an external program in a child process and waits for it to finish.
-// For now programs are looked up only in /bin.
 void run_program(const std::vector<std::string> &args) {
-    std::string program = "/bin/" + args[0];
+    std::string program = find_program(args[0]);
+    if (program.empty()) {
+        print_error();
+        return;
+    }
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -69,11 +122,9 @@ void process_line(const std::string &line) {
         return;
     }
 
-    if (args[0] == "exit") {
-        exit(0);
+    if (!run_builtin(args)) {
+        run_program(args);
     }
-
-    run_program(args);
 }
 
 }  // namespace
