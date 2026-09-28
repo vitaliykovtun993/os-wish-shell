@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -14,6 +15,13 @@ namespace {
 
 // Directories searched for executables, in order. Changed by `path`.
 std::vector<std::string> search_path = {"/bin"};
+
+// A parsed command: program name with arguments and an optional file
+// that receives both stdout and stderr (empty if there is no redirection).
+struct Command {
+    std::vector<std::string> args;
+    std::string out_file;
+};
 
 // The one and only error message required by the specification.
 void print_error() {
@@ -33,6 +41,30 @@ std::vector<std::string> tokenize(const std::string &line) {
         start = line.find_first_not_of(whitespace, end);
     }
     return tokens;
+}
+
+// Parses "args [> file]". The '>' does not need spaces around it.
+// Returns false on a syntax error: more than one '>', no command before it,
+// or anything other than exactly one file name after it.
+bool parse_command(const std::string &text, Command &cmd) {
+    size_t redirect = text.find('>');
+    if (redirect == std::string::npos) {
+        cmd.args = tokenize(text);
+        cmd.out_file.clear();
+        return true;
+    }
+
+    if (text.find('>', redirect + 1) != std::string::npos) {
+        return false;
+    }
+
+    cmd.args = tokenize(text.substr(0, redirect));
+    std::vector<std::string> files = tokenize(text.substr(redirect + 1));
+    if (cmd.args.empty() || files.size() != 1) {
+        return false;
+    }
+    cmd.out_file = files[0];
+    return true;
 }
 
 // Finds an executable in the search path. Returns an empty string if the
@@ -83,8 +115,8 @@ bool run_builtin(const std::vector<std::string> &args) {
 }
 
 // Runs an external program in a child process and waits for it to finish.
-void run_program(const std::vector<std::string> &args) {
-    std::string program = find_program(args[0]);
+void run_program(const Command &cmd) {
+    std::string program = find_program(cmd.args[0]);
     if (program.empty()) {
         print_error();
         return;
@@ -97,9 +129,19 @@ void run_program(const std::vector<std::string> &args) {
     }
 
     if (pid == 0) {
+        // Redirection sends both stdout and stderr to the file.
+        if (!cmd.out_file.empty()) {
+            int fd = open(cmd.out_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0 || dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
+                print_error();
+                _exit(1);
+            }
+            close(fd);
+        }
+
         // execv() needs a NULL-terminated array of C strings.
         std::vector<char *> argv;
-        for (const std::string &arg : args) {
+        for (const std::string &arg : cmd.args) {
             argv.push_back(const_cast<char *>(arg.c_str()));
         }
         argv.push_back(nullptr);
@@ -117,13 +159,17 @@ void run_program(const std::vector<std::string> &args) {
 
 // Handles one line of input.
 void process_line(const std::string &line) {
-    std::vector<std::string> args = tokenize(line);
-    if (args.empty()) {
+    Command cmd;
+    if (!parse_command(line, cmd)) {
+        print_error();
+        return;
+    }
+    if (cmd.args.empty()) {
         return;
     }
 
-    if (!run_builtin(args)) {
-        run_program(args);
+    if (!run_builtin(cmd.args)) {
+        run_program(cmd);
     }
 }
 
