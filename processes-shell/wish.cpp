@@ -114,18 +114,19 @@ bool run_builtin(const std::vector<std::string> &args) {
     return true;
 }
 
-// Runs an external program in a child process and waits for it to finish.
-void run_program(const Command &cmd) {
+// Starts an external program in a child process without waiting for it.
+// Returns the child's pid, or -1 if the program could not be started.
+pid_t start_program(const Command &cmd) {
     std::string program = find_program(cmd.args[0]);
     if (program.empty()) {
         print_error();
-        return;
+        return -1;
     }
 
     pid_t pid = fork();
     if (pid < 0) {
         print_error();
-        return;
+        return -1;
     }
 
     if (pid == 0) {
@@ -152,24 +153,50 @@ void run_program(const Command &cmd) {
         _exit(1);
     }
 
-    if (waitpid(pid, nullptr, 0) < 0) {
-        print_error();
-    }
+    return pid;
 }
 
-// Handles one line of input.
-void process_line(const std::string &line) {
-    Command cmd;
-    if (!parse_command(line, cmd)) {
-        print_error();
-        return;
+// Splits a line into the parts separated by '&'. Empty parts are kept
+// (and later ignored), so "&" or "cmd &" are not errors.
+std::vector<std::string> split_parallel(const std::string &line) {
+    std::vector<std::string> parts;
+    size_t start = 0;
+    size_t amp;
+    while ((amp = line.find('&', start)) != std::string::npos) {
+        parts.push_back(line.substr(start, amp - start));
+        start = amp + 1;
     }
-    if (cmd.args.empty()) {
-        return;
+    parts.push_back(line.substr(start));
+    return parts;
+}
+
+// Handles one line of input: starts every command of "cmd1 & cmd2 & ..."
+// first, then waits for all of them to finish.
+void process_line(const std::string &line) {
+    std::vector<pid_t> children;
+
+    for (const std::string &part : split_parallel(line)) {
+        Command cmd;
+        if (!parse_command(part, cmd)) {
+            print_error();
+            continue;
+        }
+        if (cmd.args.empty()) {
+            continue;
+        }
+
+        if (!run_builtin(cmd.args)) {
+            pid_t pid = start_program(cmd);
+            if (pid > 0) {
+                children.push_back(pid);
+            }
+        }
     }
 
-    if (!run_builtin(cmd.args)) {
-        run_program(cmd);
+    for (pid_t pid : children) {
+        if (waitpid(pid, nullptr, 0) < 0) {
+            print_error();
+        }
     }
 }
 
